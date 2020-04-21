@@ -18,6 +18,7 @@ typedef struct JSONData {
 static PyObject* encode_object(PyObject *object, PyObject *fallback);
 static PyObject* encode_string(PyObject *object);
 static PyObject* encode_unicode(PyObject *object);
+static PyObject* encode_float(PyObject *object);
 static PyObject* encode_tuple(PyObject *object, PyObject *fallback);
 static PyObject* encode_list(PyObject *object, PyObject *fallback);
 static PyObject* encode_dict(PyObject *object, PyObject *fallback);
@@ -579,6 +580,14 @@ decode_json(JSONData *jsondata)
 
 /* ------------------------------ Encoding ----------------------------- */
 
+static raise_encoding_error(PyObject *object)
+{
+    PyObject *repr = PyObject_Repr(object);
+    PyErr_Format(JSON_EncodeError, "object %s is not JSON encodable",
+        PyString_AsString(repr));
+    Py_DECREF(repr);
+}
+
 /*
  * This function is an almost verbatim copy of PyString_Repr() from
  * Python's stringobject.c with the following differences:
@@ -789,6 +798,22 @@ encode_unicode(PyObject *unicode)
     return repr;
 }
 
+static PyObject*
+encode_float(PyObject *object)
+{
+    double val = PyFloat_AS_DOUBLE(object);
+    if (Py_IS_NAN(val)) {
+        return PyString_FromString("NaN");
+    } else if (Py_IS_INFINITY(val)) {
+        if (val > 0) {
+            return PyString_FromString("Infinity");
+        } else {
+            return PyString_FromString("-Infinity");
+        }
+    } else {
+        return PyObject_Repr(object);
+    }
+}
 
 /*
  * This function is an almost verbatim copy of tuplerepr() from
@@ -1052,18 +1077,7 @@ encode_object(PyObject *object, PyObject *fallback)
     } else if (PyUnicode_Check(object)) {
         return encode_unicode(object);
     } else if (PyFloat_Check(object)) {
-        double val = PyFloat_AS_DOUBLE(object);
-        if (Py_IS_NAN(val)) {
-            return PyString_FromString("NaN");
-        } else if (Py_IS_INFINITY(val)) {
-            if (val > 0) {
-                return PyString_FromString("Infinity");
-            } else {
-                return PyString_FromString("-Infinity");
-            }
-        } else {
-            return PyObject_Repr(object);
-        }
+        return encode_float(object);
     } else if (PyInt_Check(object) || PyLong_Check(object)) {
         return PyObject_Str(object);
     } else if (PyList_Check(object)) {
@@ -1087,6 +1101,26 @@ encode_object(PyObject *object, PyObject *fallback)
         result = encode_dict(object, fallback);
         Py_LeaveRecursiveCall();
         return result;
+    } else if (PyNumber_Check(object)) {
+        PyObject *value, *result;
+        int cmp = -1;
+        value = PyNumber_Long(object);
+        if (value) {
+            if (PyObject_Cmp(value, object, &cmp) == -1) cmp = -1;
+            else if (cmp == 0) result = PyObject_Str(value);
+            Py_DECREF(value);
+        };
+        /* if cmp is zero, integer formatting was applied.  Else use float. */
+        if (cmp) {
+            value = PyNumber_Float(object);
+            if (value) result = encode_float(value);
+            else {
+                raise_encoding_error(object);
+                return NULL;
+            }
+            Py_DECREF(value);
+        }
+        return result;
     } else if (fallback) {
         PyObject *args, *resolve, *result;
         if (Py_EnterRecursiveCall(" while encoding a non-primitive Python object"))
@@ -1099,10 +1133,7 @@ encode_object(PyObject *object, PyObject *fallback)
         Py_LeaveRecursiveCall();
         return result;
     } else {
-        PyObject *repr = PyObject_Repr(object);
-        PyErr_Format(JSON_EncodeError, "object %s is not JSON encodable",
-            PyString_AsString(repr));
-        Py_DECREF(repr);
+        raise_encoding_error(object);
         return NULL;
     }
 }
@@ -1240,5 +1271,4 @@ initcjson(void)
     PyModule_AddStringConstant(m, "__version__", string(MODULE_VERSION));
 
 }
-
 

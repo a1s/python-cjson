@@ -22,6 +22,10 @@
 
 from datetime import datetime
 from decimal import Decimal
+try:
+    from collections import UserList
+except ImportError:
+    from UserList import UserList
 
 import unittest
 
@@ -321,6 +325,10 @@ class JsonTest(unittest.TestCase):
     def testWriteLong(self):
         self.assertEqual("12345678901234567890", cjson.encode(12345678901234567890))
 
+    def testWriteDecimal(self):
+        self.assertEqual("123", cjson.encode(Decimal('123.00')))
+        self.assertEqual("1.23", cjson.encode(Decimal('1.23')))
+
     def testWriteLongUnicode(self):
         # This test causes a buffer overrun in cjson 1.0.5, on UCS4 builds.
         # The string length is only resized for wide unicode characters if
@@ -337,12 +345,14 @@ class JsonTest(unittest.TestCase):
 
     def testWriteCustomObject(self):
         def fallback(obj):
-            if isinstance(obj, Decimal):
-                return float(obj)
+            if isinstance(obj, UserList):
+                return list(obj)
             raise cjson.EncodeError(obj)
+        check = UserList([1,2,3])
         with self.assertRaises(cjson.EncodeError):
-            cjson.encode(Decimal(1.23))
-        self.assertEqual(cjson.encode(Decimal(1.23), fallback), '1.23')
+            cjson.encode(check)
+        self.assertEqual('[1,2,3]',
+            _removeWhitespace(cjson.encode(check, fallback)))
         with self.assertRaises(cjson.EncodeError):
             cjson.encode(datetime.now(), fallback)
 
