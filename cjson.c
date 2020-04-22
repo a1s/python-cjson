@@ -15,13 +15,23 @@ typedef struct JSONData {
     int  all_unicode; // make all output strings unicode if true
 } JSONData;
 
-static PyObject* encode_object(PyObject *object, PyObject *fallback);
+#define DEFAULT_DATE_FORMAT "%Y-%m-%d"
+#define DEFAULT_TIME_FORMAT "%H:%M:%S"
+typedef struct EncodingParams {
+    PyObject *fallback; // Function called for unknown object types
+    PyObject *fmt_datetime; // Format string for the datetime objects
+    PyObject *fmt_date; // Format string for the datetime objects
+    PyObject *fmt_time; // Format string for the datetime objects
+} EncodingParams;
+static PyObject *type_datetime, *type_date, *type_time, *str_strftime;
+
+static PyObject* encode_object(PyObject *object, EncodingParams params);
 static PyObject* encode_string(PyObject *object);
 static PyObject* encode_unicode(PyObject *object);
 static PyObject* encode_float(PyObject *object);
-static PyObject* encode_tuple(PyObject *object, PyObject *fallback);
-static PyObject* encode_list(PyObject *object, PyObject *fallback);
-static PyObject* encode_dict(PyObject *object, PyObject *fallback);
+static PyObject* encode_tuple(PyObject *object, EncodingParams params);
+static PyObject* encode_list(PyObject *object, EncodingParams params);
+static PyObject* encode_dict(PyObject *object, EncodingParams params);
 
 static PyObject* decode_json(JSONData *jsondata);
 static PyObject* decode_null(JSONData *jsondata);
@@ -824,7 +834,7 @@ encode_float(PyObject *object)
  */
 
 static PyObject*
-encode_tuple(PyObject *tuple, PyObject *fallback)
+encode_tuple(PyObject *tuple, EncodingParams params)
 {
     Py_ssize_t i, n;
     PyObject *s, *temp;
@@ -841,7 +851,7 @@ encode_tuple(PyObject *tuple, PyObject *fallback)
 
     /* Do repr() on each element. */
     for (i = 0; i < n; ++i) {
-        s = encode_object(v->ob_item[i], fallback);
+        s = encode_object(v->ob_item[i], params);
         if (s == NULL)
             goto Done;
         PyTuple_SET_ITEM(pieces, i, s);
@@ -889,7 +899,7 @@ Done:
  *   represented in JSON.
  */
 static PyObject*
-encode_list(PyObject *list, PyObject *fallback)
+encode_list(PyObject *list, EncodingParams params)
 {
     Py_ssize_t i;
     PyObject *s, *temp;
@@ -918,7 +928,7 @@ encode_list(PyObject *list, PyObject *fallback)
      * so must refetch the list size on each iteration. */
     for (i = 0; i < v->ob_size; ++i) {
         int status;
-        s = encode_object(v->ob_item[i], fallback);
+        s = encode_object(v->ob_item[i], params);
         if (s == NULL)
             goto Done;
         status = PyList_Append(pieces, s);
@@ -972,7 +982,7 @@ Done:
  *   be represented in JSON.
  */
 static PyObject*
-encode_dict(PyObject *dict, PyObject *fallback)
+encode_dict(PyObject *dict, EncodingParams params)
 {
     Py_ssize_t i;
     PyObject *s, *temp, *colon = NULL;
@@ -1016,9 +1026,9 @@ encode_dict(PyObject *dict, PyObject *fallback)
 
         /* Prevent repr from deleting value during key format. */
         Py_INCREF(value);
-        s = encode_object(key, fallback);
+        s = encode_object(key, params);
         PyString_Concat(&s, colon);
-        PyString_ConcatAndDel(&s, encode_object(value, fallback));
+        PyString_ConcatAndDel(&s, encode_object(value, params));
         Py_DECREF(value);
         if (s == NULL)
             goto Done;
@@ -1064,7 +1074,7 @@ Done:
 
 
 static PyObject*
-encode_object(PyObject *object, PyObject *fallback)
+encode_object(PyObject *object, EncodingParams params)
 {
     if (object == Py_True) {
         return PyString_FromString("true");
@@ -1084,21 +1094,21 @@ encode_object(PyObject *object, PyObject *fallback)
         PyObject *result;
         if (Py_EnterRecursiveCall(" while encoding a JSON array from a Python list"))
             return NULL;
-        result = encode_list(object, fallback);
+        result = encode_list(object, params);
         Py_LeaveRecursiveCall();
         return result;
     } else if (PyTuple_Check(object)) {
         PyObject *result;
         if (Py_EnterRecursiveCall(" while encoding a JSON array from a Python tuple"))
             return NULL;
-        result = encode_tuple(object, fallback);
+        result = encode_tuple(object, params);
         Py_LeaveRecursiveCall();
         return result;
     } else if (PyDict_Check(object)) { // use PyMapping_Check(object) instead? -Dan
         PyObject *result;
         if (Py_EnterRecursiveCall(" while encoding a JSON object"))
             return NULL;
-        result = encode_dict(object, fallback);
+        result = encode_dict(object, params);
         Py_LeaveRecursiveCall();
         return result;
     } else if (PyNumber_Check(object)) {
@@ -1121,14 +1131,23 @@ encode_object(PyObject *object, PyObject *fallback)
             Py_DECREF(value);
         }
         return result;
-    } else if (fallback) {
+    } else if (type_datetime && PyObject_IsInstance(object, type_datetime)) {
+        return PyObject_CallMethodObjArgs(object,
+            str_strftime, params.fmt_datetime, NULL);
+    } else if (type_date && PyObject_IsInstance(object, type_date)) {
+        return PyObject_CallMethodObjArgs(object,
+            str_strftime, params.fmt_date, NULL);
+    } else if (type_time && PyObject_IsInstance(object, type_time)) {
+        return PyObject_CallMethodObjArgs(object,
+            str_strftime, params.fmt_time, NULL);
+    } else if (params.fallback) {
         PyObject *args, *resolve, *result;
         if (Py_EnterRecursiveCall(" while encoding a non-primitive Python object"))
             return NULL;
         args = PyTuple_Pack(1, object);
-        resolve = PyObject_CallObject(fallback, args);
+        resolve = PyObject_CallObject(params.fallback, args);
         Py_DECREF(args);
-        result = PyErr_Occurred() ? NULL : encode_object(resolve, fallback);
+        result = PyErr_Occurred() ? NULL : encode_object(resolve, params);
         Py_XDECREF(resolve);
         Py_LeaveRecursiveCall();
         return result;
@@ -1144,19 +1163,48 @@ encode_object(PyObject *object, PyObject *fallback)
 static PyObject*
 JSON_encode(PyObject *self, PyObject *args, PyObject *kwargs)
 {
-    static char *kwlist[] = {"obj", "default", NULL};
-    PyObject *object, *fallback = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|O:decode",
-        kwlist, &object, &fallback
+    PyObject *object, *result;
+    EncodingParams params = {NULL, NULL, NULL, NULL};
+    /* http://www.c-faq.com/bool/booltype.html */
+    int own_fmt_datetime, own_fmt_date, own_fmt_time;
+    static char *kwlist[] = {"obj", "default",
+        "fmt_datetime", "fmt_date", "fmt_time", NULL};
+    own_fmt_datetime = own_fmt_date = own_fmt_time = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OSSS:encode",
+        kwlist, &object, &params.fallback, &params.fmt_datetime,
+        &params.fmt_date, &params.fmt_time
     )) return NULL;
-    if (fallback && PyObject_Not(fallback)) fallback = NULL;
-    if (fallback && !PyCallable_Check(fallback)) {
+    if (params.fallback && PyObject_Not(params.fallback)) {
+        params.fallback = NULL;
+    }
+    if (params.fallback && !PyCallable_Check(params.fallback)) {
+        result = PyObject_Repr(params.fallback);
         PyErr_Format(PyExc_ValueError,
             "The 'default' argument %s is not callable",
-            PyObject_Repr(fallback));
+            PyString_AsString(result));
+        Py_DECREF(result);
         return NULL;
-    };
-    return encode_object(object, fallback);
+    }
+    if (!params.fmt_date || PyObject_Not(params.fmt_date)) {
+        params.fmt_date = PyString_FromString(DEFAULT_DATE_FORMAT);
+        own_fmt_date = 1;
+    }
+    if (!params.fmt_time || PyObject_Not(params.fmt_time)) {
+        params.fmt_time = PyString_FromString(DEFAULT_TIME_FORMAT);
+        own_fmt_time = 1;
+    }
+    if (!params.fmt_datetime || PyObject_Not(params.fmt_datetime)) {
+        params.fmt_datetime = PyString_FromFormat("%s %s",
+            PyString_AsString(params.fmt_date),
+            PyString_AsString(params.fmt_time)
+        );
+        own_fmt_datetime = 1;
+    }
+    result = encode_object(object, params);
+    if (own_fmt_datetime) Py_DECREF(params.fmt_datetime);
+    if (own_fmt_date) Py_DECREF(params.fmt_date);
+    if (own_fmt_time) Py_DECREF(params.fmt_time);
+    return result;
 }
 
 
@@ -1217,10 +1265,16 @@ JSON_decode(PyObject *self, PyObject *args, PyObject *kwargs)
 
 static PyMethodDef cjson_methods[] = {
     {"encode", (PyCFunction)JSON_encode,  METH_VARARGS|METH_KEYWORDS,
-    PyDoc_STR("encode(object, default=Null) -> generate the JSON representation for object.\n"
-              "The optional argument `default' is function that gets called for objects\n"
-              "that can’t otherwise be serialized. It should return a JSON encodable\n"
-              "version of the object or raise cjson.EncodeError.")},
+    PyDoc_STR("encode(object, default=None, fmt_datetime=\"\","
+              "  fmt_date=\"%Y-%m-%d\", fmt_time=\"%H:%M:%S\","
+              ") -> generate the JSON representation for object.\n"
+              "The optional argument `default' is a function that gets called\n"
+              "for objects that can't otherwise be serialized. It should return\n"
+              "a JSON encodable version of the object or raise cjson.EncodeError.\n"
+              "The optional `datetime_fmt', `date_fmt', and `time_fmt' arguments\n"
+              "are passed to `.strftime()' for datetime, date, and time objects\n"
+              "respectively. When `datetime_fmt' is omitted or empty string, it will\n"
+              "be composed of `date_fmt' and `time_fmt' joined with a space.")},
 
     {"decode", (PyCFunction)JSON_decode,  METH_VARARGS|METH_KEYWORDS,
     PyDoc_STR("decode(string, all_unicode=False) -> parse the JSON representation into\n"
@@ -1242,12 +1296,47 @@ PyDoc_STRVAR(module_doc,
 PyMODINIT_FUNC
 initcjson(void)
 {
-    PyObject *m;
+    PyObject* m = PyImport_ImportModule("datetime");
+    if (m) {
+        type_datetime = PyObject_GetAttrString(m, "datetime");
+        if (type_datetime) Py_INCREF(type_datetime);
+        type_date = PyObject_GetAttrString(m, "date");
+        if (type_date) Py_INCREF(type_date);
+        type_time = PyObject_GetAttrString(m, "time");
+        if (type_time) Py_INCREF(type_time);
+        Py_DECREF(m);
+    } else {
+        type_datetime = type_date = type_time = NULL;
+        PyErr_Clear();
+    }
 
     m = Py_InitModule3("cjson", cjson_methods, module_doc);
 
-    if (m == NULL)
+    if (m == NULL) {
+        if (type_datetime) {
+            Py_DECREF(type_datetime);
+            type_datetime = NULL;
+        }
+        if (type_date) {
+            Py_DECREF(type_date);
+            type_date = NULL;
+        }
+        if (type_time) {
+            Py_DECREF(type_time);
+            type_time = NULL;
+        }
         return;
+    } else {
+        /* Pass the ownership for type references to the module
+         * so they are correctly DECREFed when the module is unloaded.
+         */
+        if (type_datetime) PyModule_AddObject(m, "datetime", type_datetime);
+        if (type_date) PyModule_AddObject(m, "date", type_date);
+        if (type_time) PyModule_AddObject(m, "time", type_time);
+        /* Also make the method name object for PyObject_CallMethodObjArgs */
+        str_strftime = PyString_FromString("strftime");
+        PyModule_AddObject(m, "STRFTIME", str_strftime);
+    }
 
     JSON_Error = PyErr_NewException("cjson.Error", NULL, NULL);
     if (JSON_Error == NULL)

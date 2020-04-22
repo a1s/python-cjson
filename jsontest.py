@@ -20,7 +20,7 @@
 ## License along with this library; if not, write to the Free Software
 ## Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 
-from datetime import datetime
+from datetime import datetime, date, time
 from decimal import Decimal
 try:
     from collections import UserList
@@ -343,6 +343,22 @@ class JsonTest(unittest.TestCase):
         self.assertEqual(r'"\ud834\udd1e\ud834\udd1e\ud834\udd1e\ud834\udd1e'
                          r'\u1234\u1234\u1234\u1234\u1234\u1234"', s)
 
+    def testWriteDate(self):
+        dt = date(2020, 4, 21)
+        self.assertEqual("2020-04-21", cjson.encode(dt))
+        self.assertEqual("21.04", cjson.encode(dt, fmt_date="%d.%m"))
+
+    def testWriteTime(self):
+        dt = time(22, 23, 24, 25)
+        self.assertEqual("22:23:24", cjson.encode(dt))
+        self.assertEqual("23:24.000025", cjson.encode(dt, fmt_time="%M:%S.%f"))
+
+    def testWriteDatetime(self):
+        dt = datetime(2020, 4, 21, 22, 23, 24, 25)
+        self.assertEqual("2020-04-21 22:23:24", cjson.encode(dt))
+        self.assertEqual("21.04T23:24.000025",
+            cjson.encode(dt, fmt_datetime="%d.%mT%M:%S.%f"))
+
     def testWriteCustomObject(self):
         def fallback(obj):
             if isinstance(obj, UserList):
@@ -354,7 +370,7 @@ class JsonTest(unittest.TestCase):
         self.assertEqual('[1,2,3]',
             _removeWhitespace(cjson.encode(check, fallback)))
         with self.assertRaises(cjson.EncodeError):
-            cjson.encode(datetime.now(), fallback)
+            cjson.encode(object(), fallback)
 
 def main():
     unittest.main()
