@@ -1132,23 +1132,31 @@ encode_object(PyObject *object, EncodingParams params)
         Py_LeaveRecursiveCall();
         return result;
     } else if (PyNumber_Check(object)) {
-        PyObject *value, *result;
+        PyObject *integer, *decimal, *result;
         int cmp = -1;
-        value = PyNumber_Long(object);
-        if (value) {
-            if (PyObject_Cmp(value, object, &cmp) == -1) cmp = -1;
-            else if (cmp == 0) result = PyObject_Str(value);
-            Py_DECREF(value);
-        };
-        /* if cmp is zero, integer formatting was applied.  Else use float. */
-        if (cmp) {
-            value = PyNumber_Float(object);
-            if (value) result = encode_float(value);
-            else {
-                raise_encoding_error(object);
-                return NULL;
+        integer = PyNumber_Long(object);
+        decimal = PyNumber_Float(object);
+        if (integer && decimal) {
+            if (PyObject_Cmp(integer, decimal, &cmp) == -1) {
+                /* Cannot compare, fall back to float */
+                result = encode_float(decimal);
+            } else if (cmp == 0) {
+                /* Integer Value */
+                result = PyObject_Str(integer);
+            } else {
+                result = encode_float(decimal);
             }
-            Py_DECREF(value);
+            Py_DECREF(integer);
+            Py_DECREF(decimal);
+        } else if (integer) {
+            result = PyObject_Str(integer);
+            Py_DECREF(integer);
+        } else if (decimal) {
+            result = encode_float(decimal);
+            Py_DECREF(decimal);
+        } else {
+            raise_encoding_error(object);
+            return NULL;
         }
         return result;
     } else if (type_datetime && PyObject_IsInstance(object, type_datetime)) {
