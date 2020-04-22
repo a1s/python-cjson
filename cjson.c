@@ -29,6 +29,7 @@ static PyObject* encode_object(PyObject *object, EncodingParams params);
 static PyObject* encode_string(PyObject *object);
 static PyObject* encode_unicode(PyObject *object);
 static PyObject* encode_float(PyObject *object);
+static PyObject* encode_datetime(PyObject *object, PyObject *fmt);
 static PyObject* encode_tuple(PyObject *object, EncodingParams params);
 static PyObject* encode_list(PyObject *object, EncodingParams params);
 static PyObject* encode_dict(PyObject *object, EncodingParams params);
@@ -825,6 +826,25 @@ encode_float(PyObject *object)
     }
 }
 
+static PyObject*
+encode_datetime(PyObject *object, PyObject* fmt)
+{
+    PyObject *value, *result;
+    value = PyObject_CallMethodObjArgs(object, str_strftime, fmt, NULL);
+    if (value) {
+        /* Note: the formats are required to be strings
+         * in PyArg_ParseTupleAndKeywords so the value may not be Unicode
+         * and we are safe to use encode_string().
+         */
+        result = encode_string(value);
+        Py_DECREF(value);
+    } else {
+        raise_encoding_error(object);
+        return NULL;
+    };
+    return result;
+}
+
 /*
  * This function is an almost verbatim copy of tuplerepr() from
  * Python's tupleobject.c with the following differences:
@@ -1132,14 +1152,11 @@ encode_object(PyObject *object, EncodingParams params)
         }
         return result;
     } else if (type_datetime && PyObject_IsInstance(object, type_datetime)) {
-        return PyObject_CallMethodObjArgs(object,
-            str_strftime, params.fmt_datetime, NULL);
+        return encode_datetime(object, params.fmt_datetime);
     } else if (type_date && PyObject_IsInstance(object, type_date)) {
-        return PyObject_CallMethodObjArgs(object,
-            str_strftime, params.fmt_date, NULL);
+        return encode_datetime(object, params.fmt_date);
     } else if (type_time && PyObject_IsInstance(object, type_time)) {
-        return PyObject_CallMethodObjArgs(object,
-            str_strftime, params.fmt_time, NULL);
+        return encode_datetime(object, params.fmt_time);
     } else if (params.fallback) {
         PyObject *args, *resolve, *result;
         if (Py_EnterRecursiveCall(" while encoding a non-primitive Python object"))

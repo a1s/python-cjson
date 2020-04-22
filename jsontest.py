@@ -345,18 +345,23 @@ class JsonTest(unittest.TestCase):
 
     def testWriteDate(self):
         dt = date(2020, 4, 21)
-        self.assertEqual("2020-04-21", cjson.encode(dt))
-        self.assertEqual("21.04", cjson.encode(dt, fmt_date="%d.%m"))
+        self.assertEqual("\"2020-04-21\"", cjson.encode(dt))
+        self.assertEqual("\"2020-04-21\"", cjson.encode(dt, fmt_date=""))
+        self.assertEqual("\"21.04\"", cjson.encode(dt, fmt_date="%d.%m"))
 
     def testWriteTime(self):
         dt = time(22, 23, 24, 25)
-        self.assertEqual("22:23:24", cjson.encode(dt))
-        self.assertEqual("23:24.000025", cjson.encode(dt, fmt_time="%M:%S.%f"))
+        self.assertEqual("\"22:23:24\"", cjson.encode(dt))
+        self.assertEqual("\"22:23:24\"", cjson.encode(dt, fmt_time=""))
+        self.assertEqual("\"23:24.000025\"",
+            cjson.encode(dt, fmt_time="%M:%S.%f"))
 
     def testWriteDatetime(self):
         dt = datetime(2020, 4, 21, 22, 23, 24, 25)
-        self.assertEqual("2020-04-21 22:23:24", cjson.encode(dt))
-        self.assertEqual("21.04T23:24.000025",
+        self.assertEqual("\"2020-04-21 22:23:24\"", cjson.encode(dt))
+        self.assertEqual("\"2020-04-21 22:23:24\"",
+            cjson.encode(dt, fmt_datetime=""))
+        self.assertEqual("\"21.04T23:24.000025\"",
             cjson.encode(dt, fmt_datetime="%d.%mT%M:%S.%f"))
 
     def testWriteCustomObject(self):
